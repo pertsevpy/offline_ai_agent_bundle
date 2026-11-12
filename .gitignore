@@ -1,0 +1,33 @@
+# Оффлайн-бандл и тяжелые бинарные файлы
+offline_ai_agent_bundle/
+*.tar
+*.tar.zst
+*.tgz
+models/
+ollama/
+playwright_browsers/
+wheels/
+
+# Виртуальные окружения и кэш Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Локальная база знаний и исходные документы
+app/exam_db/
+app/docs/*
+!app/docs/.gitkeep
+
+# Сгенерированные скрипты и логи
+run_env.sh
+install_offline.sh
+start_agent.sh
+*.log
+
+# Временные HTML-дампы и настройки IDE
+*.html
+HTML*.txt
+.vscode/
+.idea/
