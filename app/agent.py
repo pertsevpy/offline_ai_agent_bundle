@@ -39,10 +39,20 @@ def warmup_models():
         print(f"[Предупреждение при прогреве]: {e}")
 
 
-def get_context_from_db(collection, question_text, top_k=3):
-    """Ищет top_k самых подходящих фрагментов текста из нормативных документов."""
+def get_context_from_db(collection, question_text, options_list=None, top_k=5):
+    """Ищет top_k самых подходящих фрагментов текста по вопросу и вариантам ответа."""
     try:
-        response = ollama.embeddings(model=EMBED_MODEL, prompt=question_text)
+        # Формируем комбинированный запрос: сам вопрос + текст вариантов ответа
+        if options_list:
+            options_clean = "; ".join(opt.strip() for opt in options_list if opt.strip())
+            search_query = f"{question_text}\nВарианты: {options_clean}"
+        else:
+            search_query = question_text
+
+        # Ограничиваем длину запроса (~1500 символов), чтобы длинные варианты не заглушали сам вопрос
+        search_query = search_query[:1500]
+
+        response = ollama.embeddings(model=EMBED_MODEL, prompt=search_query)
         results = collection.query(
             query_embeddings=[response["embedding"]],
             n_results=top_k
@@ -196,7 +206,7 @@ def main():
             print(f"================ {header_info} ================")
             print(f"Вопрос: {question_text}")
 
-            rag_context = get_context_from_db(collection, question_text, top_k=3)
+            rag_context = get_context_from_db(collection, question_text, options_list=options_list, top_k=5)
 
             start_time = time.time()
             chosen_nums, reason = ask_qwen(question_text, options_list, rag_context, is_multiple)
