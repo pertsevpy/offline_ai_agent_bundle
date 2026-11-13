@@ -1,7 +1,13 @@
 #!/bin/bash
 set -e
 
-BUNDLE_DIR="$(realpath ./offline_ai_agent_bundle)"
+# Защита от запуска изнутри папки offline_ai_agent_bundle
+if [ "$(basename "$PWD")" = "offline_ai_agent_bundle" ]; then
+    BUNDLE_DIR="$PWD"
+else
+    BUNDLE_DIR="$(realpath ./offline_ai_agent_bundle)"
+fi
+
 PYTHON_VER="3.11" # Версия Python на целевом ПК
 
 mkdir -p "$BUNDLE_DIR"/{wheels,ollama,models,playwright_browsers,app/docs}
@@ -19,19 +25,18 @@ pip download \
     python-docx \
     beautifulsoup4 \
     lxml \
-    llama-index-core \
-    llama-index-llms-ollama \
-    llama-index-embeddings-ollama \
-    llama-index-vector-stores-chroma \
-    llama-index-readers-file
+    flask
 
 echo "=== 2. Проверка и скачивание Playwright (Chromium) ==="
 export PLAYWRIGHT_BROWSERS_PATH="$BUNDLE_DIR/playwright_browsers"
-if ls -d "$PLAYWRIGHT_BROWSERS_PATH"/chromium* >/dev/null 2>&1; then
+if ls -d "$PLAYWRIGHT_BROWSERS_PATH"/chromium-[0-9]* >/dev/null 2>&1; then
     echo "[SKIP] Браузер Chromium уже скачан в $PLAYWRIGHT_BROWSERS_PATH"
 else
-    pip install playwright --quiet
-    playwright install chromium
+    rm -rf /tmp/pw_venv
+    python3 -m venv /tmp/pw_venv
+    /tmp/pw_venv/bin/pip install --no-index --find-links="$BUNDLE_DIR/wheels" playwright 2>/dev/null || /tmp/pw_venv/bin/pip install playwright --quiet
+    /tmp/pw_venv/bin/playwright install chromium
+    rm -rf /tmp/pw_venv
 fi
 
 echo "=== 3. Проверка и скачивание Ollama с GitHub Releases ==="
@@ -68,13 +73,12 @@ if [ "$NEED_DOWNLOAD_OLLAMA" = true ]; then
     curl -fL -C - "$OLLAMA_URL" -o "$BUNDLE_DIR/ollama/$FILENAME"
 fi
 
-echo "=== 4. Проверка и скачивание весов моделей (LLM + Embeddings) ==="
-# Освобождаем порт 11434 на случай зависшего фонового процесса
-pkill -f "ollama" 2>/dev/null || true
+echo "=== 4. Скачивание и регистрация весов моделей (curl + ollama create) ==="
+pkill -x "ollama" 2>/dev/null || true
 sleep 2
 
 rm -rf /tmp/ollama_bin
-mkdir -p /tmp/ollama_bin
+mkdir -p /tmp/ollama_bin "$BUNDLE_DIR/raw_gguf"
 
 if [[ "$FILENAME" == *.zst ]]; then
     tar --use-compress-program=unzstd -xf "$BUNDLE_DIR/ollama/$FILENAME" -C /tmp/ollama_bin
@@ -89,35 +93,68 @@ if [ -z "$OLLAMA_EXEC" ]; then
 fi
 chmod +x "$OLLAMA_EXEC"
 
+# Если от прежних попыток остались недокачанные blobs без манифестов — очищаем
+if [ ! -d "$BUNDLE_DIR/models/manifests" ] || [ -z "$(ls -A "$BUNDLE_DIR/models/manifests" 2>/dev/null)" ]; then
+    rm -rf "$BUNDLE_DIR/models"/*
+fi
+
 export OLLAMA_MODELS="$BUNDLE_DIR/models"
 "$OLLAMA_EXEC" serve >/dev/null 2>&1 &
 OLLAMA_PID=$!
-sleep 4
+until curl -sf http://127.0.0.1:11434/api/tags >/dev/null; do sleep 1; done
 
-LLM_MODEL="hf.co/bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M"
-EMBED_MODEL="hf.co/BAAI/bge-m3-GGUF:Q8_0"
+LLM_GGUF="$BUNDLE_DIR/raw_gguf/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+EMBED_GGUF="$BUNDLE_DIR/raw_gguf/bge-m3-Q8_0.gguf"
 
-INSTALLED_MODELS=$("$OLLAMA_EXEC" list 2>/dev/null || true)
-
-if echo "$INSTALLED_MODELS" | grep -q "Qwen2.5-7B-Instruct-GGUF"; then
-    echo "[SKIP] Модель LLM ($LLM_MODEL) уже скачана."
+# 1. Скачиваем LLM напрямую через curl (обходит SSRF-блокировку прокси 198.18.x.x)
+if [ ! -f "$LLM_GGUF" ] || [ "$(stat -c%s "$LLM_GGUF")" -lt 4500000000 ]; then
+    echo "Скачивание LLM (Qwen2.5-7B-Instruct Q4_K_M) через curl..."
+    curl -fL -C - "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf" -o "$LLM_GGUF"
 else
-    echo "Скачивание LLM: $LLM_MODEL..."
-    "$OLLAMA_EXEC" pull "$LLM_MODEL"
+    echo "[SKIP] Файл $LLM_GGUF уже скачан."
 fi
 
-if echo "$INSTALLED_MODELS" | grep -q "bge-m3-GGUF"; then
-    echo "[SKIP] Модель эмбеддингов ($EMBED_MODEL) уже скачана."
+# 2. Скачиваем Embeddings напрямую через curl
+if [ ! -f "$EMBED_GGUF" ] || [ "$(stat -c%s "$EMBED_GGUF")" -lt 600000000 ]; then
+    echo "Скачивание Embeddings (bge-m3 Q8_0) через curl..."
+    curl -fL -C - "https://huggingface.co/gpustack/bge-m3-GGUF/resolve/main/bge-m3-Q8_0.gguf" -o "$EMBED_GGUF"
 else
-    echo "Скачивание Embeddings: $EMBED_MODEL..."
-    "$OLLAMA_EXEC" pull "$EMBED_MODEL"
+    echo "[SKIP] Файл $EMBED_GGUF уже скачан."
+fi
+
+# 3. Регистрируем модели в локальном хранилище Ollama
+INSTALLED_MODELS=$("$OLLAMA_EXEC" list 2>/dev/null || true)
+
+if echo "$INSTALLED_MODELS" | grep -q "qwen2.5:7b"; then
+    echo "[SKIP] Модель qwen2.5:7b уже зарегистрирована в Ollama."
+else
+    cat << EOF > /tmp/Modelfile.llm
+FROM $LLM_GGUF
+TEMPLATE """{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{- range .Messages }}<|im_start|>{{ .Role }}
+{{ .Content }}<|im_end|>
+{{ end }}<|im_start|>assistant
+"""
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "<|im_end|>"
+EOF
+    "$OLLAMA_EXEC" create qwen2.5:7b -f /tmp/Modelfile.llm
+fi
+
+if echo "$INSTALLED_MODELS" | grep -q "bge-m3"; then
+    echo "[SKIP] Модель bge-m3 уже зарегистрирована в Ollama."
+else
+    echo "FROM $EMBED_GGUF" > /tmp/Modelfile.embed
+    "$OLLAMA_EXEC" create bge-m3 -f /tmp/Modelfile.embed
 fi
 
 echo "Итоговый список моделей в бандле:"
 "$OLLAMA_EXEC" list
 
 kill $OLLAMA_PID 2>/dev/null || true
-rm -rf /tmp/ollama_bin
+# Удаляем временные файлы и исходные GGUF (они уже скопированы в models/blobs)
+rm -rf /tmp/ollama_bin /tmp/Modelfile.llm /tmp/Modelfile.embed "$BUNDLE_DIR/raw_gguf"
 
 echo "=== 5. Генерация скриптов установки и запуска ==="
 cat << 'EOF' > "$BUNDLE_DIR/install_offline.sh"
@@ -156,9 +193,7 @@ source "$BASE_DIR/venv/bin/activate"
 
 echo "[3/4] Оффлайн-установка Python-зависимостей..."
 pip install --no-index --find-links="$BASE_DIR/wheels" \
-    playwright ollama chromadb pypdf python-docx beautifulsoup4 lxml \
-    llama-index-core llama-index-llms-ollama llama-index-embeddings-ollama \
-    llama-index-vector-stores-chroma llama-index-readers-file
+    playwright ollama chromadb pypdf python-docx beautifulsoup4 lxml flask
 
 echo "[4/4] Генерация скриптов окружения и запуска..."
 cat << ENV > "$BASE_DIR/run_env.sh"
@@ -175,7 +210,7 @@ cat << 'START' > "$BASE_DIR/start_agent.sh"
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$BASE_DIR/run_env.sh"
 
-pkill -f "ollama" 2>/dev/null || true
+pkill -x "ollama" 2>/dev/null || true
 sleep 1
 
 echo "Запуск локального сервера Ollama..."
@@ -183,7 +218,7 @@ ollama serve > "$BASE_DIR/ollama.log" 2>&1 &
 OLLAMA_PID=$!
 trap "kill $OLLAMA_PID 2>/dev/null" EXIT
 
-sleep 4
+until curl -sf http://127.0.0.1:11434/api/tags >/dev/null; do sleep 1; done
 ollama list
 
 echo "Запуск AI-агента..."
@@ -198,5 +233,6 @@ EOF
 chmod +x "$BUNDLE_DIR/install_offline.sh"
 
 echo "=== 6. Упаковка бандла в offline_ai_agent_bundle.tar ==="
-tar -cf offline_ai_agent_bundle.tar -C "$(dirname "$BUNDLE_DIR")" "$(basename "$BUNDLE_DIR")"
-echo "Готово! Итоговый архив: $(realpath offline_ai_agent_bundle.tar)"
+ARCHIVE_PATH="$(dirname "$BUNDLE_DIR")/offline_ai_agent_bundle.tar"
+tar -cf "$ARCHIVE_PATH" -C "$(dirname "$BUNDLE_DIR")" "$(basename "$BUNDLE_DIR")"
+echo "Готово! Итоговый архив: $ARCHIVE_PATH"
