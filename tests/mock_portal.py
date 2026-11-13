@@ -1,13 +1,14 @@
 import json
 from pathlib import Path
-from flask import Flask, render_template_string, request, jsonify
+
+from flask import Flask, jsonify, redirect, render_template_string, request
 
 app = Flask(__name__)
 QUESTIONS_FILE = Path(__file__).parent / "questions.json"
 
 
 def load_questions_bank() -> dict:
-    with open(QUESTIONS_FILE, "r", encoding="utf-8") as f:
+    with open(QUESTIONS_FILE, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -299,6 +300,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 """
 
 
+@app.route("/")
+def root_redirect():
+    return redirect("/student/programs")
+
+
 @app.route("/student/programs")
 def index():
     return render_template_string(HTML_TEMPLATE)
@@ -310,8 +316,7 @@ def get_questions():
     topic = request.args.get("topic", "geography")
     qs = bank.get(topic, bank.get("geography", []))
     sanitized = [
-        {"id": q["id"], "type": q["type"], "text": q["text"], "options": q["options"]}
-        for q in qs
+        {"id": q["id"], "type": q["type"], "text": q["text"], "options": q["options"]} for q in qs
     ]
     return jsonify(sanitized)
 
@@ -333,12 +338,14 @@ def submit_exam():
 
     total = len(qs)
     percent = round((correct_count / total) * 100) if total else 0
-    return jsonify({
-        "correct_count": correct_count,
-        "total": total,
-        "percent": percent,
-        "passed": percent >= 80
-    })
+    return jsonify(
+        {
+            "correct_count": correct_count,
+            "total": total,
+            "percent": percent,
+            "passed": percent >= 80,
+        }
+    )
 
 
 if __name__ == "__main__":
