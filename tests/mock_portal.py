@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import json
 from pathlib import Path
 
@@ -190,9 +191,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       currentIdx = 0;
       userAnswers = {};
 
+      renderQuestion();
       document.getElementById('modal_exam_checkbox').checked = true;
       document.getElementById('react_exam').classList.add('modal-open');
-      renderQuestion();
     }
 
     function startTimer() {
