@@ -1,0 +1,25 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "offline_ai_agent_bundle",
+    "__pycache__",
+]
+
+[tool.ruff.lint]
+# E/W - pycodestyle, F - Pyflakes, I - isort (сортировка импортов), B - flake8-bugbear, UP - pyupgrade
+select = ["E", "W", "F", "I", "B", "UP"]
+ignore = [
+    "E501", # не ругаться на длинные строки внутри многострочных HTML/системных промптов
+    "W293", # пробелы на пустых строках внутри многострочных HTML-шаблонов
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "mock_portal"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
