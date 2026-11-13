@@ -1,21 +1,23 @@
 import json
 import time
+
 import chromadb
-import ollama
 from playwright.sync_api import sync_playwright
 
+import ollama
+
 # ================= НАСТРОЙКИ =================
-DB_DIR = "./exam_db"                 # Путь к базе знаний ChromaDB
+DB_DIR = "./exam_db"  # Путь к базе знаний ChromaDB
 COLLECTION_NAME = "exam_materials"
 
 # Укажите точные имена моделей из `ollama list`
-EMBED_MODEL = "hf.co/BAAI/bge-m3-GGUF:Q8_0"                     # или "bge-m3"
-LLM_MODEL = "hf.co/bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M"   # или "qwen3:1.7b"
+EMBED_MODEL = "hf.co/BAAI/bge-m3-GGUF:Q8_0"  # или "bge-m3"
+LLM_MODEL = "hf.co/bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M"  # или "qwen3:1.7b"
 
-TEST_URL = "http://адрес-вашего-сайта/student/programs"  # Впишите точный URL портала
-MANUAL_SETUP_TIMEOUT = 300000        # 5 минут на ручной вход и выбор темы
-HEADLESS_MODE = False                # False — чтобы войти и выбрать тему вручную
-AUTO_CLICK = True                    # True — автоматический клик и переход дальше
+TEST_URL = "http://127.0.0.1:8000/student/programs"  # Впишите точный URL портала
+MANUAL_SETUP_TIMEOUT = 300000  # 5 минут на ручной вход и выбор темы
+HEADLESS_MODE = False  # False — чтобы войти и выбрать тему вручную
+AUTO_CLICK = True  # True — автоматический клик и переход дальше
 
 # CSS-селекторы под вашу платформу (проверено по HTML)
 SELECTOR_MODAL = "#react_exam"
@@ -32,7 +34,7 @@ def warmup_models():
         ollama.chat(
             model=LLM_MODEL,
             messages=[{"role": "user", "content": "Ответь цифрой 1"}],
-            options={"num_ctx": 3072, "num_predict": 10}
+            options={"num_ctx": 3072, "num_predict": 10},
         )
         print("Модели загружены в ОЗУ и готовы к работе!")
     except Exception as e:
@@ -53,10 +55,7 @@ def get_context_from_db(collection, question_text, options_list=None, top_k=5):
         search_query = search_query[:1500]
 
         response = ollama.embeddings(model=EMBED_MODEL, prompt=search_query)
-        results = collection.query(
-            query_embeddings=[response["embedding"]],
-            n_results=top_k
-        )
+        results = collection.query(query_embeddings=[response["embedding"]], n_results=top_k)
         docs = results.get("documents", [])
         if docs and len(docs) > 0 and len(docs[0]) > 0:
             return "\n---\n".join(docs[0])
@@ -68,9 +67,10 @@ def get_context_from_db(collection, question_text, options_list=None, top_k=5):
 def ask_qwen(question_text, options_list, context, is_multiple=False):
     """Отправляет вопрос и контекст в LLM и получает номера правильных ответов."""
     options_formatted = "\n".join([f"{i + 1}. {opt}" for i, opt in enumerate(options_list)])
-    
+
     task_instruction = (
-        "Выбери ОДИН правильный вариант ответа" if not is_multiple 
+        "Выбери ОДИН правильный вариант ответа"
+        if not is_multiple
         else "Выбери ВСЕ правильные варианты ответа (может быть несколько)"
     )
 
@@ -96,11 +96,7 @@ def ask_qwen(question_text, options_list, context, is_multiple=False):
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
             format="json",
-            options={
-                "temperature": 0.1,
-                "num_ctx": 4096,
-                "num_predict": 300
-            }
+            options={"temperature": 0.1, "num_ctx": 4096, "num_predict": 300},
         )
         raw_content = response["message"]["content"].strip()
         data = json.loads(raw_content)
@@ -154,7 +150,9 @@ def main():
         print("1. Введите логин и пароль в открывшемся окне браузера.")
         print("2. Выберите нужную программу и тему в дереве слева.")
         print("3. Нажмите кнопку 'Режим обучения' или 'Начать Экзамен'.")
-        print(f"Агент автоматически начнет работу, как только появится окно теста (ожидание до {MANUAL_SETUP_TIMEOUT // 1000} сек.)...")
+        print(
+            f"Агент автоматически начнет работу, как только появится окно теста (ожидание до {MANUAL_SETUP_TIMEOUT // 1000} сек.)..."
+        )
         print("========================================================\n")
 
         try:
@@ -170,7 +168,9 @@ def main():
         while True:
             # Проверяем, не появилось ли финальное диалоговое окно с результатом (alert_confirm)
             if page.locator("#alert_confirm").is_visible():
-                result_text = page.locator("#alert_confirm .modal-box > div:first-child").inner_text().strip()
+                result_text = (
+                    page.locator("#alert_confirm .modal-box > div:first-child").inner_text().strip()
+                )
                 print(f"\n[РЕЗУЛЬТАТ ТЕСТА]: {result_text}")
                 break
 
@@ -198,15 +198,21 @@ def main():
                 for el in option_labels
             ]
 
-            is_multiple = page.locator("#react_exam .plain table input[type='checkbox']").count() > 0
+            is_multiple = (
+                page.locator("#react_exam .plain table input[type='checkbox']").count() > 0
+            )
 
             header_loc = page.locator("#react_exam .modal-box > div.flex.justify-between")
-            header_info = header_loc.inner_text().replace("\n", " | ") if header_loc.is_visible() else ""
+            header_info = (
+                header_loc.inner_text().replace("\n", " | ") if header_loc.is_visible() else ""
+            )
 
             print(f"================ {header_info} ================")
             print(f"Вопрос: {question_text}")
 
-            rag_context = get_context_from_db(collection, question_text, options_list=options_list, top_k=5)
+            rag_context = get_context_from_db(
+                collection, question_text, options_list=options_list, top_k=5
+            )
 
             start_time = time.time()
             chosen_nums, reason = ask_qwen(question_text, options_list, rag_context, is_multiple)
@@ -216,11 +222,17 @@ def main():
             print(f"-> Обоснование: {reason}\n")
 
             if not AUTO_CLICK:
-                cmd = input("Нажмите Enter для клика или введите номера через пробел (q - выход): ").strip()
-                if cmd.lower() == 'q':
+                cmd = input(
+                    "Нажмите Enter для клика или введите номера через пробел (q - выход): "
+                ).strip()
+                if cmd.lower() == "q":
                     break
                 elif cmd:
-                    chosen_nums = [int(x) for x in cmd.split() if x.isdigit() and 1 <= int(x) <= len(option_labels)]
+                    chosen_nums = [
+                        int(x)
+                        for x in cmd.split()
+                        if x.isdigit() and 1 <= int(x) <= len(option_labels)
+                    ]
 
             # Кликаем по <label> выбранных вариантов
             for num in chosen_nums:

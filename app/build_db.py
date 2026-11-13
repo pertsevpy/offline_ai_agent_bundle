@@ -1,22 +1,24 @@
 import os
 import re
 from pathlib import Path
+
 import chromadb
-import ollama
-from pypdf import PdfReader
 from docx import Document
+from pypdf import PdfReader
+
+import ollama
 
 # ================= НАСТРОЙКИ =================
-DOCS_DIR = "./docs"                  # Папка с исходными документами (.pdf, .docx, .txt)
-DB_DIR = "./exam_db"                 # Папка для сохранения векторной базы
-COLLECTION_NAME = "exam_materials"   # Имя коллекции (должно совпадать с agent.py)
+DOCS_DIR = "./docs"  # Папка с исходными документами (.pdf, .docx, .txt)
+DB_DIR = "./exam_db"  # Папка для сохранения векторной базы
+COLLECTION_NAME = "exam_materials"  # Имя коллекции (должно совпадать с agent.py)
 
 # Укажите точное имя модели эмбеддингов из `ollama list`
 EMBED_MODEL = "hf.co/BAAI/bge-m3-GGUF:Q8_0"  # или "bge-m3"
 
-CHUNK_SIZE = 1000                    # Размер фрагмента текста в символах
-CHUNK_OVERLAP = 200                  # Перекрытие между фрагментами (чтобы не терять смысл на стыках)
-REBUILD_DB = True                    # True = пересоздать базу с нуля; False = дописать новые файлы
+CHUNK_SIZE = 1000  # Размер фрагмента текста в символах
+CHUNK_OVERLAP = 200  # Перекрытие между фрагментами (чтобы не терять смысл на стыках)
+REBUILD_DB = True  # True = пересоздать базу с нуля; False = дописать новые файлы
 # =============================================
 
 
@@ -58,7 +60,9 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-def split_into_chunks(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
+def split_into_chunks(
+    text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP
+) -> list[str]:
     """Разбивает текст на фрагменты с перекрытием, стараясь резать по границам предложений/абзацев."""
     if not text:
         return []
@@ -73,7 +77,7 @@ def split_into_chunks(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CH
             # Ищем ближайший перенос строки или точку, чтобы не рвать слово пополам
             split_pos = max(
                 text.rfind("\n", start + chunk_size // 2, end),
-                text.rfind(". ", start + chunk_size // 2, end)
+                text.rfind(". ", start + chunk_size // 2, end),
             )
             if split_pos != -1:
                 end = split_pos + 1
@@ -93,7 +97,9 @@ def main():
     docs_path = Path(DOCS_DIR)
     if not docs_path.exists():
         docs_path.mkdir(parents=True, exist_ok=True)
-        print(f"Создана папка {DOCS_DIR}. Поместите туда .pdf, .docx или .txt файлы и перезапустите скрипт.")
+        print(
+            f"Создана папка {DOCS_DIR}. Поместите туда .pdf, .docx или .txt файлы и перезапустите скрипт."
+        )
         return
 
     supported_exts = {".pdf", ".docx", ".txt"}
@@ -114,8 +120,7 @@ def main():
             pass
 
     collection = db_client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"}
+        name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
     )
 
     total_chunks = 0
@@ -157,12 +162,7 @@ def main():
             documents.append(enriched_chunk)
             metadatas.append({"source": file_path.name, "chunk": chunk_idx})
 
-        collection.add(
-            ids=ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas
-        )
+        collection.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
 
         total_chunks += len(chunks)
         print(f"OK ({len(chunks)} фрагм.)")
