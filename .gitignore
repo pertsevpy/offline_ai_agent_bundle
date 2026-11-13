@@ -7,6 +7,7 @@ models/
 ollama/
 playwright_browsers/
 wheels/
+ollama_bin/
 
 # Виртуальные окружения и кэш Python
 venv/
@@ -31,3 +32,6 @@ start_agent.sh
 HTML*.txt
 .vscode/
 .idea/
+
+.venv*
+.ruff*
