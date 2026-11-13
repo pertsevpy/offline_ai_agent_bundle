@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import json
 import time
 
@@ -10,16 +11,16 @@ import ollama
 DB_DIR = "./exam_db"  # Путь к базе знаний ChromaDB
 COLLECTION_NAME = "exam_materials"
 
-# Укажите точные имена моделей из `ollama list`
-EMBED_MODEL = "hf.co/BAAI/bge-m3-GGUF:Q8_0"  # или "bge-m3"
-LLM_MODEL = "hf.co/bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M"  # или "qwen3:1.7b"
+# Точные имена моделей из `ollama list`
+EMBED_MODEL = "bge-m3"
+LLM_MODEL = "qwen2.5:7b"
 
-TEST_URL = "http://127.0.0.1:8000/student/programs"  # Впишите точный URL портала
+TEST_URL = "http://127.0.0.1:8000/student/programs"
 MANUAL_SETUP_TIMEOUT = 300000  # 5 минут на ручной вход и выбор темы
 HEADLESS_MODE = False  # False — чтобы войти и выбрать тему вручную
 AUTO_CLICK = True  # True — автоматический клик и переход дальше
 
-# CSS-селекторы под вашу платформу (проверено по HTML)
+# CSS-селекторы под платформу
 SELECTOR_MODAL = "#react_exam"
 SELECTOR_OPTIONS_LABELS = "#react_exam .plain table label"
 SELECTOR_NEXT_BTN = "#react_exam .modal-box > div.flex:last-child button"
@@ -44,14 +45,12 @@ def warmup_models():
 def get_context_from_db(collection, question_text, options_list=None, top_k=5):
     """Ищет top_k самых подходящих фрагментов текста по вопросу и вариантам ответа."""
     try:
-        # Формируем комбинированный запрос: сам вопрос + текст вариантов ответа
         if options_list:
             options_clean = "; ".join(opt.strip() for opt in options_list if opt.strip())
             search_query = f"{question_text}\nВарианты: {options_clean}"
         else:
             search_query = question_text
 
-        # Ограничиваем длину запроса (~1500 символов), чтобы длинные варианты не заглушали сам вопрос
         search_query = search_query[:1500]
 
         response = ollama.embeddings(model=EMBED_MODEL, prompt=search_query)
@@ -74,7 +73,7 @@ def ask_qwen(question_text, options_list, context, is_multiple=False):
         else "Выбери ВСЕ правильные варианты ответа (может быть несколько)"
     )
 
-    prompt = f"""Ты — точный юридический и экзаменационный ассистент. {task_instruction}, опираясь строго на приведенный ниже справочный материал.
+    prompt = f"""Ты — точный экзаменационный ассистент. {task_instruction}, опираясь на приведенный справочный материал (а если вопрос общеизвестный — на точные факты).
 
 Справочный материал:
 {context}
@@ -87,7 +86,7 @@ def ask_qwen(question_text, options_list, context, is_multiple=False):
 
 Верни ответ строго в формате JSON с двумя полями:
 {{
-  "reason": "краткое обоснование в 1 предложение со ссылкой на норму из текста",
+  "reason": "краткое обоснование в 1 предложение",
   "answers": [список целых чисел — номеров правильных вариантов от 1 до {len(options_list)}]
 }}"""
 
@@ -127,27 +126,22 @@ def extract_clean_question(page):
 def main():
     print("Подключение к локальной базе знаний...")
     db_client = chromadb.PersistentClient(path=DB_DIR)
-    collection = db_client.get_collection(name=COLLECTION_NAME)
+    collection = db_client.get_or_create_collection(name=COLLECTION_NAME)
 
     with sync_playwright() as p:
         print("Запуск браузера...")
-        # Если на целевом ПК установлен Яндекс Браузер и нужен он, раскомментируйте executable_path:
-        browser = p.chromium.launch(
-            # executable_path="/usr/bin/yandex-browser",
-            headless=HEADLESS_MODE
-        )
+        browser = p.chromium.launch(headless=HEADLESS_MODE)
         context = browser.new_context(viewport={"width": 1366, "height": 900})
         page = context.new_page()
 
         print(f"Открываем портал: {TEST_URL}")
         page.goto(TEST_URL)
 
-        # Прогреваем модели, пока пользователь авторизуется
         warmup_models()
 
         print("\n========================================================")
         print("ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЯ:")
-        print("1. Введите логин и пароль в открывшемся окне браузера.")
+        print("1. Введите логин и пароль в открывшемся окне браузера (если требуется).")
         print("2. Выберите нужную программу и тему в дереве слева.")
         print("3. Нажмите кнопку 'Режим обучения' или 'Начать Экзамен'.")
         print(
@@ -156,37 +150,50 @@ def main():
         print("========================================================\n")
 
         try:
-            page.wait_for_selector(SELECTOR_MODAL, state="visible", timeout=MANUAL_SETUP_TIMEOUT)
-            print("Окно экзамена обнаружено! Перехватываю управление...\n")
+            page.wait_for_selector(
+                "#modal_exam_checkbox:checked", state="attached", timeout=MANUAL_SETUP_TIMEOUT
+            )
+            print("Окно экзамена обнаружено! Перехватываю управление...")
+            time.sleep(0.5)
         except Exception:
             print("Время ожидания истекло, окно экзамена так и не было открыто.")
+            input("Нажмите Enter для закрытия браузера...")
             browser.close()
             return
 
         last_question_text = ""
 
         while True:
-            # Проверяем, не появилось ли финальное диалоговое окно с результатом (alert_confirm)
-            if page.locator("#alert_confirm").is_visible():
+            # Проверяем открытый тег <dialog id="alert_confirm" open> с итогом теста
+            if page.locator("dialog#alert_confirm[open]").count() > 0:
                 result_text = (
                     page.locator("#alert_confirm .modal-box > div:first-child").inner_text().strip()
                 )
                 print(f"\n[РЕЗУЛЬТАТ ТЕСТА]: {result_text}")
                 break
 
-            # Проверяем, открыто ли еще модальное окно экзамена
-            if not page.locator(SELECTOR_MODAL).is_visible():
-                print("\nОкно экзамена закрыто. Тест завершен!")
+            # Если тест закрыли вручную или он завершился, ждём до 1.5 сек появления окна результата
+            if not page.locator("#modal_exam_checkbox").is_checked():
+                time.sleep(0.8)
+                if page.locator("dialog#alert_confirm[open]").count() > 0:
+                    result_text = (
+                        page.locator("#alert_confirm .modal-box > div:first-child")
+                        .inner_text()
+                        .strip()
+                    )
+                    print(f"\n[РЕЗУЛЬТАТ ТЕСТА]: {result_text}")
+                else:
+                    print("\nОкно экзамена закрыто.")
                 break
 
-            # Ждем, пока внутри .plain отрендерится таблица с вариантами
+            # Ждём отрисовки таблицы с вариантами ответа
             if page.locator(SELECTOR_OPTIONS_LABELS).count() == 0:
                 time.sleep(0.2)
                 continue
 
             question_text = extract_clean_question(page)
 
-            # Защита от повторного считывания того же вопроса во время анимации перехода
+            # Защита от повторного считывания того же вопроса при переключении
             if not question_text or question_text == last_question_text:
                 time.sleep(0.25)
                 continue
@@ -241,23 +248,27 @@ def main():
                     option_labels[idx].click()
                     time.sleep(0.15)
 
-            # Нажимаем кнопку "Следующий вопрос" (или завершение)
+            # Нажимаем кнопку "Следующий вопрос" или "Завершить"
             next_btn = page.locator(SELECTOR_NEXT_BTN)
             if next_btn.is_visible():
                 next_btn.click()
-                time.sleep(0.6)
+                time.sleep(0.5)
 
-                # Если на последнем вопросе всплыло окно подтверждения #react_confirm — подтверждаем
-                confirm_btn = page.locator("#react_confirm button:has-text('Подтвердить')")
-                if confirm_btn.is_visible():
-                    confirm_btn.click()
-                    time.sleep(0.5)
+                # Если на последнем вопросе открылось окно подтверждения <dialog id="react_confirm" open>
+                if page.locator("dialog#react_confirm[open]").count() > 0:
+                    confirm_btn = page.locator("#react_confirm button:has-text('Подтвердить')")
+                    if confirm_btn.is_visible():
+                        confirm_btn.click()
+                        time.sleep(0.6)
             else:
                 print("Кнопка перехода не найдена. Ожидаем ручного действия...")
                 time.sleep(2)
 
-        print("Работа агента завершена! Окно браузера останется открытым на 15 секунд...")
-        time.sleep(15)
+        print("\nРабота агента завершена! Браузер остаётся открытым для просмотра результата.")
+        try:
+            input("Нажмите Enter в этом окне терминала, когда захотите закрыть браузер...")
+        except EOFError:
+            page.wait_for_event("close", timeout=0)
         browser.close()
 
 

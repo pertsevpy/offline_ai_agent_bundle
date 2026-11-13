@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import os
 import re
 from pathlib import Path
@@ -14,7 +15,7 @@ DB_DIR = "./exam_db"  # Папка для сохранения векторно�
 COLLECTION_NAME = "exam_materials"  # Имя коллекции (должно совпадать с agent.py)
 
 # Укажите точное имя модели эмбеддингов из `ollama list`
-EMBED_MODEL = "hf.co/BAAI/bge-m3-GGUF:Q8_0"  # или "bge-m3"
+EMBED_MODEL = "bge-m3"  # или "bge-m3"
 
 CHUNK_SIZE = 1000  # Размер фрагмента текста в символах
 CHUNK_OVERLAP = 200  # Перекрытие между фрагментами (чтобы не терять смысл на стыках)

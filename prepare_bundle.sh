@@ -8,7 +8,7 @@ else
     BUNDLE_DIR="$(realpath ./offline_ai_agent_bundle)"
 fi
 
-PYTHON_VER="3.11" # Версия Python на целевом ПК
+PYTHON_VER="3.13" # Версия Python на целевом ПК
 
 mkdir -p "$BUNDLE_DIR"/{wheels,ollama,models,playwright_browsers,app/docs}
 
@@ -224,6 +224,13 @@ ollama list
 echo "Запуск AI-агента..."
 mkdir -p "$BASE_DIR/app/docs"
 cd "$BASE_DIR/app"
+
+# Автоматическая индексация, если база ещё не создана, но в docs лежат файлы
+if [ ! -d "$BASE_DIR/app/exam_db" ] && [ -n "$(ls -A "$BASE_DIR/app/docs" 2>/dev/null | grep -v '\.gitkeep')" ]; then
+    echo "База знаний не найдена. Запуск первичной индексации документов..."
+    python3 build_db.py
+fi
+
 python3 agent.py
 START
 chmod +x "$BASE_DIR/start_agent.sh"
